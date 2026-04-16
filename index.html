@@ -148,6 +148,20 @@ body{font-family:'Noto Sans KR',-apple-system,sans-serif;background:var(--bg);co
 .ach-name{font-size:14px;font-weight:700;margin-bottom:2px}
 .ach-desc{font-size:12px;color:var(--sub)}
 
+/* ── VOICE PICKER ── */
+.voice-grid{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+.voice-item{background:var(--card);border:1.5px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:all 0.15s}
+.voice-item.selected{border-color:var(--accent);background:var(--accent-light)}
+.voice-item:active{transform:scale(0.98)}
+.voice-dot{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;background:var(--bg)}
+.voice-info{flex:1}
+.voice-name{font-size:15px;font-weight:700;margin-bottom:2px}
+.voice-desc{font-size:12px;color:var(--sub)}
+.voice-check{font-size:18px;color:var(--accent);opacity:0;transition:opacity 0.2s;margin-right:4px}
+.voice-item.selected .voice-check{opacity:1}
+.voice-play{background:var(--border);border:none;border-radius:8px;padding:7px 13px;font-family:inherit;font-size:12px;font-weight:700;color:var(--sub);cursor:pointer;flex-shrink:0}
+.voice-play:active{background:var(--accent);color:#fff}
+
 /* ── NOTIF ── */
 .notif{position:fixed;top:0;left:0;right:0;z-index:9998;pointer-events:none;display:flex;justify-content:center;padding-top:56px}
 .notif-pill{background:var(--text);color:var(--card);font-size:14px;font-weight:700;padding:10px 22px;border-radius:30px;transform:translateY(-80px);opacity:0;transition:all 0.35s cubic-bezier(0.175,0.885,0.32,1.275)}
@@ -291,6 +305,16 @@ body{font-family:'Noto Sans KR',-apple-system,sans-serif;background:var(--bg);co
   </div>
 </div>
 
+<!-- VOICE PICKER -->
+<div id="sec-voice" class="section">
+  <div class="section-title">🎙 목소리 선택</div>
+  <p style="font-size:13px;color:var(--sub);margin-bottom:16px;">▶ 버튼으로 미리 들어보고 마음에 드는 목소리를 선택하세요</p>
+  <div class="voice-grid" id="voiceGrid"></div>
+  <div style="background:var(--accent-light);border-radius:12px;padding:12px 14px;font-size:13px;color:var(--accent);margin-top:4px;">
+    💡 선택한 목소리는 자동으로 저장돼요
+  </div>
+</div>
+
 <!-- TAB BAR -->
 <div class="tabbar">
   <button class="tab-btn active" onclick="switchTab('learn',this)"><span class="tab-icon">📚</span>학습</button>
@@ -298,6 +322,7 @@ body{font-family:'Noto Sans KR',-apple-system,sans-serif;background:var(--bg);co
   <button class="tab-btn"        onclick="switchTab('quiz',this)"><span class="tab-icon">⚔️</span>퀴즈</button>
   <button class="tab-btn"        onclick="switchTab('book',this)"><span class="tab-icon">📖</span>표현집</button>
   <button class="tab-btn"        onclick="switchTab('stats',this)"><span class="tab-icon">🏆</span>통계</button>
+  <button class="tab-btn"        onclick="switchTab('voice',this)"><span class="tab-icon">🎙</span>목소리</button>
 </div>
 
 <script>
@@ -376,6 +401,19 @@ const ACHIEVEMENTS = [
 // ── STATE ────────────────────────────────────────────────────────────────────
 const KEY      = 'nihongo_v4';
 const OAIKEY   = 'nihongo_oai';
+const VOICEKEY = 'nihongo_voice';
+
+const VOICES = [
+  {id:'nova',    emoji:'👩', name:'Nova',    desc:'밝고 친근한 여성 목소리 (기본값)'},
+  {id:'shimmer', emoji:'🌸', name:'Shimmer', desc:'부드럽고 따뜻한 여성 목소리'},
+  {id:'alloy',   emoji:'🤖', name:'Alloy',   desc:'중성적이고 차분한 목소리'},
+  {id:'echo',    emoji:'🧑', name:'Echo',    desc:'부드러운 남성 목소리'},
+  {id:'fable',   emoji:'📖', name:'Fable',   desc:'따뜻하고 이야기하는 느낌'},
+  {id:'onyx',    emoji:'🎙', name:'Onyx',    desc:'낮고 깊은 남성 목소리'},
+];
+
+function getVoice() { return localStorage.getItem(VOICEKEY) || 'nova'; }
+function setVoice(v) { localStorage.setItem(VOICEKEY, v); audioCache_obj = {}; }
 
 let st = (() => {
   try { return {...{xp:0,level:1,streak:0,lastDate:null,currentLesson:0,currentPhrase:0,
@@ -422,7 +460,7 @@ window.addEventListener('load', () => {
     document.getElementById('keyScreen').classList.add('hidden');
   }
   checkStreak(); renderXP(); renderLesson();
-  buildHira(); loadQuiz(); renderBook(); renderStats(); startTimer();
+  buildHira(); loadQuiz(); renderBook(); renderStats(); renderVoicePicker(); startTimer();
 });
 
 // ── TIMER ────────────────────────────────────────────────────────────────────
@@ -465,42 +503,81 @@ function renderXP() {
 }
 
 // ── VOICE (OpenAI TTS) ───────────────────────────────────────────────────────
-const audioCache = {};
+let audioCache_obj = {};
 
-async function speak(text) {
+async function speak(text, callerBtn) {
   const oaiKey = getOAIKey();
   if (!oaiKey) { notify('🔑 API 키를 먼저 입력해 주세요'); changeKey(); return; }
 
-  const btn = document.getElementById('speakBtn');
-  if (btn) { btn.textContent = '⏳ 로딩중...'; btn.disabled = true; }
+  const btn = callerBtn || document.getElementById('speakBtn');
+  const origText = btn ? btn.textContent : '';
+  if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
 
+  const cacheKey = getVoice() + '_' + text;
   try {
-    if (audioCache[text]) {
-      audioCache[text].currentTime = 0;
-      await audioCache[text].play();
+    if (audioCache_obj[cacheKey]) {
+      audioCache_obj[cacheKey].currentTime = 0;
+      await audioCache_obj[cacheKey].play();
     } else {
       const res = await fetch('https://api.openai.com/v1/audio/speech', {
         method: 'POST',
         headers: { 'Authorization': 'Bearer '+oaiKey, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model:'tts-1-hd', input:text, voice:'nova', speed:0.85 })
+        body: JSON.stringify({ model:'tts-1-hd', input:text, voice:getVoice(), speed:0.85 })
       });
-
       if (res.status === 401) { notify('❌ API 키가 올바르지 않아요'); changeKey(); return; }
       if (res.status === 429) { notify('❌ 크레딧이 부족해요. OpenAI에서 충전해 주세요'); return; }
       if (!res.ok) { notify('❌ 발음 오류 ('+res.status+')'); return; }
-
       const blob  = await res.blob();
-      const url   = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audioCache[text] = audio;
+      const audio = new Audio(URL.createObjectURL(blob));
+      audioCache_obj[cacheKey] = audio;
       await audio.play();
     }
   } catch(e) {
     notify('❌ 네트워크 오류. 인터넷 연결을 확인해 주세요');
-    console.error(e);
   }
+  if (btn) { btn.textContent = origText; btn.disabled = false; }
+}
 
-  if (btn) { btn.textContent = '🔊 발음 듣기'; btn.disabled = false; }
+// ── VOICE PICKER ─────────────────────────────────────────────────────────────
+function renderVoicePicker() {
+  const current = getVoice();
+  document.getElementById('voiceGrid').innerHTML = VOICES.map(v => `
+    <div class="voice-item ${v.id===current?'selected':''}" id="vitem_${v.id}" onclick="selectVoice('${v.id}')">
+      <div class="voice-dot">${v.emoji}</div>
+      <div class="voice-info">
+        <div class="voice-name">${v.name}</div>
+        <div class="voice-desc">${v.desc}</div>
+      </div>
+      <span class="voice-check">✓</span>
+      <button class="voice-play" onclick="event.stopPropagation();previewVoice('${v.id}',this)">▶ 듣기</button>
+    </div>`).join('');
+}
+
+function selectVoice(id) {
+  setVoice(id);
+  document.querySelectorAll('.voice-item').forEach(el => el.classList.remove('selected'));
+  document.getElementById('vitem_'+id).classList.add('selected');
+  notify('🎙 '+VOICES.find(v=>v.id===id).name+' 목소리로 변경됐어요');
+}
+
+async function previewVoice(id, btn) {
+  const orig = btn.textContent;
+  btn.textContent = '⏳';
+  btn.disabled = true;
+  // 미리듣기는 현재 선택된 목소리 무관하게 해당 목소리로 재생
+  const oaiKey = getOAIKey();
+  if (!oaiKey) { notify('🔑 API 키를 먼저 입력해 주세요'); btn.textContent=orig; btn.disabled=false; return; }
+  try {
+    const res = await fetch('https://api.openai.com/v1/audio/speech', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+oaiKey,'Content-Type':'application/json'},
+      body: JSON.stringify({model:'tts-1-hd', input:'よろしくお願いします', voice:id, speed:0.85})
+    });
+    if (!res.ok) { notify('❌ 오류 ('+res.status+')'); btn.textContent=orig; btn.disabled=false; return; }
+    const audio = new Audio(URL.createObjectURL(await res.blob()));
+    await audio.play();
+  } catch(e) { notify('❌ 네트워크 오류'); }
+  btn.textContent = orig; btn.disabled = false;
 }
 
 // ── LESSON ───────────────────────────────────────────────────────────────────
@@ -680,6 +757,7 @@ function switchTab(name, el) {
   el.classList.add('active');
   if(name==='stats') renderStats();
   if(name==='book')  renderBook();
+  if(name==='voice') renderVoicePicker();
 }
 
 // ── NOTIFY ───────────────────────────────────────────────────────────────────
